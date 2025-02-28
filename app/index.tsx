@@ -24,8 +24,9 @@ import {
   updateShift,
   initializeShiftsForDate,
   allTimes,
+  reservationEmitter
 } from "./services/Reservation";
-
+import * as Notifications from "expo-notifications";
 // Ispirazione dai valori del Tailwind config
 const COLORS = {
   primary: "#0c4b43", // Eden
@@ -293,7 +294,23 @@ const ReservationScreen = () => {
     seats: 1,
     specialRequests: "",
   });
-
+  useEffect(() => {
+    const handleNewReservation = (reservation: Reservation) => {
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: "Nuova prenotazione",
+          body: `Prenotazione da ${reservation.fullName} per le ${reservation.time}`,
+        },
+        trigger: null, // trigger immediato
+      });
+    };
+  
+    reservationEmitter.addListener("newReservation", handleNewReservation);
+  
+    return () => {
+      reservationEmitter.removeListener("newReservation", handleNewReservation);
+    };
+  }, []);
   useEffect(() => {
     const unsubscribe = subscribeToReservations((reservationsData) => {
       setReservations(reservationsData);

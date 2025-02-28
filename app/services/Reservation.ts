@@ -1,5 +1,7 @@
 import { database } from '../firebase-config';
+import { EventEmitter } from 'events';
 
+export const reservationEmitter = new EventEmitter();
 export interface Reservation {
   id?: string;
   fullName: string;
