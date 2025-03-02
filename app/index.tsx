@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -197,7 +197,7 @@ const styles = StyleSheet.create({
   },
   formScrollView: {
     flexGrow: 1, 
-    justifyContent: "center", 
+
     padding: 20
   },
   formContainer: {
@@ -267,6 +267,28 @@ const styles = StyleSheet.create({
     color: COLORS.foreground, 
     marginBottom: 20
   },
+  inAppBanner: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    backgroundColor: "#0c4b43",
+    padding: 10,
+    alignItems: "center",
+    zIndex: 1000,
+  },
+  inAppBannerText: {
+    color: "#fff",
+    fontWeight: "bold",
+  },
+});
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
 });
 
 const ReservationScreen = () => {
@@ -274,7 +296,8 @@ const ReservationScreen = () => {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [selectedShift, setSelectedShift] = useState<string>(allTimes[0]);
-
+  const [inAppNotification, setInAppNotification] = useState<string | null>(null);
+  const [showInAppNotification, setShowInAppNotification] = useState(false);
   // Stati per gestire modali e picker
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
@@ -295,21 +318,53 @@ const ReservationScreen = () => {
     specialRequests: "",
   });
   useEffect(() => {
-    const handleNewReservation = (reservation: Reservation) => {
-      Notifications.scheduleNotificationAsync({
-        content: {
-          title: "Nuova prenotazione",
-          body: `Prenotazione da ${reservation.fullName} per le ${reservation.time}`,
-        },
-        trigger: null, // trigger immediato
-      });
-    };
-  
-    reservationEmitter.addListener("newReservation", handleNewReservation);
-  
-    return () => {
-      reservationEmitter.removeListener("newReservation", handleNewReservation);
-    };
+    (async () => {
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permessi mancanti", "È necessario abilitare le notifiche per ricevere aggiornamenti sulle prenotazioni.");
+      }
+    })();
+  }, []);
+
+  const prevReservationsRef = useRef<Reservation[]>([]);
+  useEffect(() => {
+    const unsubscribe = subscribeToReservations((reservationsData) => {
+      // Se c'era già almeno una prenotazione e la nuova lista è più lunga,
+      // allora probabilmente è stata aggiunta una nuova prenotazione
+      if (
+        prevReservationsRef.current.length > 0 &&
+        reservationsData.length > prevReservationsRef.current.length
+      ) {
+        // Trova la nuova prenotazione
+        const newReservation = reservationsData.find(
+          (res) =>
+            !prevReservationsRef.current.some(
+              (prevRes) => prevRes.id === res.id
+            )
+        );
+        if (newReservation) {
+          // Pianifica la push notification
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: "Nuova prenotazione",
+              body: `Prenotazione da ${newReservation.fullName} per le ${newReservation.time}`,
+            },
+            trigger: null,
+          });
+          // Mostra l'Alert
+          Alert.alert(
+            "Nuova prenotazione",
+            `Prenotazione da ${newReservation.fullName} per le ${newReservation.time}`,
+            [{ text: "OK" }]
+          );
+        }
+      }
+      // Aggiorna il riferimento alle prenotazioni precedenti
+      prevReservationsRef.current = reservationsData;
+      setReservations(reservationsData);
+    });
+    
+    return () => unsubscribe();
   }, []);
   useEffect(() => {
     const unsubscribe = subscribeToReservations((reservationsData) => {
@@ -450,353 +505,355 @@ const ReservationScreen = () => {
   }, [selectedReservation]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar style="auto" />
-
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerText}>
-          Prenotazioni
-        </Text>
-        <View style={{ flexDirection: "column", marginBottom: 10 }}>
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => setIsHeaderDatePickerVisible(true)}
-          >
-            <Feather name="calendar" size={18} color={COLORS.foreground} style={styles.infoIcon} />
-            <Text style={styles.buttonText}>
-              {format(selectedDate, "dd MMM yyyy")}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => setIsShiftPickerVisible(true)}
-          >
-            <Feather name="clock" size={18} color={COLORS.foreground} style={styles.infoIcon} />
-            <Text style={styles.buttonText}>
-              {selectedShift} {shifts.find((s) => s.time === selectedShift)?.enabled ? "(Attivo)" : "(Bloccato)"}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.toggleButton}
-            onPress={toggleShiftStatus}
-          >
-            <Text style={styles.toggleButtonText}>
-              {shifts.find((s) => s.time === selectedShift)?.enabled ? "Blocca" : "Sblocca"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Lista prenotazioni */}
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-        {filteredReservations.length === 0 ? (
-          <View style={styles.emptyListContainer}>
-            <Text style={styles.buttonText}>
-              Nessuna prenotazione per questa data
-            </Text>
-          </View>
-        ) : (
-          filteredReservations.map((reservation) => (
-            <View
-              key={reservation.id}
-              style={styles.reservationCard}
-            >
-              <View style={styles.cardHeader}>
-                <View>
-                  <Text style={styles.cardName}>
-                    {reservation.fullName}
-                  </Text>
-                  <Text style={styles.cardPhone}>
-                    {reservation.phone}
-                  </Text>
-                </View>
-                <View style={{ flexDirection: "row" }}>
-                  <TouchableOpacity onPress={() => handleEdit(reservation)} style={styles.actionIcon}>
-                    <Feather name="edit-2" size={20} color={COLORS.accent} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => handleDelete(reservation)} style={styles.actionIcon}>
-                    <Feather name="trash-2" size={20} color={COLORS.accent} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-              <View>
-                <View style={styles.infoRow}>
-                  <Feather name="calendar" size={16} color={COLORS.foreground} style={styles.infoIcon} />
-                  <Text style={styles.infoText}>
-                    {format(new Date(reservation.date), "MMMM dd, yyyy")}
-                  </Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Feather name="clock" size={16} color={COLORS.foreground} style={styles.infoIcon} />
-                  <Text style={styles.infoText}>
-                    {reservation.time}
-                  </Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Feather name="users" size={16} color={COLORS.foreground} style={styles.infoIcon} />
-                  <Text style={styles.infoText}>
-                    {reservation.seats} seats
-                  </Text>
-                </View>
-                {reservation.specialRequests && (
-                  <View style={styles.infoRow}>
-                    <Feather name="info" size={16} color={COLORS.foreground} style={styles.infoIcon} />
-                    <Text style={styles.infoText}>
-                      {reservation.specialRequests}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </View>
-          ))
-        )}
-      </ScrollView>
-
-      {/* Header Date Picker */}
-      <DateTimePickerModal
-        isVisible={isHeaderDatePickerVisible}
-        mode="date"
-        date={selectedDate}
-        onConfirm={handleHeaderDateConfirm}
-        onCancel={() => setIsHeaderDatePickerVisible(false)}
-      />
-
-      {/* Shift Picker Modal */}
-      <Modal
-        visible={isShiftPickerVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setIsShiftPickerVisible(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>
-              Select Shift
-            </Text>
-            <ScrollView>
-              {allTimes.map((time) => {
-                const shift = shifts.find((s) => s.time === time);
-                const enabled = shift ? shift.enabled : false;
-                return (
-                  <TouchableOpacity
-                    key={time}
-                    style={styles.optionItem}
-                    onPress={() => handleShiftChange(time)}
-                  >
-                    <Text style={styles.infoText}>
-                      {time} {enabled ? "(Attivo)" : "(Bloccato)"}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+    <><SafeAreaView style={styles.container}>
+        <StatusBar style="auto" />
+        <>
+        {showInAppNotification && (
+  <View style={styles.inAppBanner}>
+    <Text style={styles.inAppBannerText}>Nuova prenotazione ricevuta!</Text>
+  </View>
+)}
+    </>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.headerText}>
+            Prenotazioni
+          </Text>
+          <View style={{ flexDirection: "column", marginBottom: 10 }}>
             <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setIsShiftPickerVisible(false)}
+              style={styles.dateButton}
+              onPress={() => setIsHeaderDatePickerVisible(true)}
             >
-              <Text style={styles.closeButtonText}>
-                Close
+              <Feather name="calendar" size={18} color={COLORS.foreground} style={styles.infoIcon} />
+              <Text style={styles.buttonText}>
+                {format(selectedDate, "dd MMM yyyy")}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dateButton}
+              onPress={() => setIsShiftPickerVisible(true)}
+            >
+              <Feather name="clock" size={18} color={COLORS.foreground} style={styles.infoIcon} />
+              <Text style={styles.buttonText}>
+                {selectedShift} {shifts.find((s) => s.time === selectedShift)?.enabled ? "(Attivo)" : "(Bloccato)"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.toggleButton}
+              onPress={toggleShiftStatus}
+            >
+              <Text style={styles.toggleButtonText}>
+                {shifts.find((s) => s.time === selectedShift)?.enabled ? "Blocca" : "Sblocca"}
               </Text>
             </TouchableOpacity>
           </View>
         </View>
-      </Modal>
 
-      {/* Edit Reservation Modal */}
-      <Modal
-        visible={isEditModalOpen}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setIsEditModalOpen(false)}
-      >
-        <ScrollView contentContainerStyle={styles.formScrollView}>
-          <View style={styles.formContainer}>
-            <Text style={styles.modalTitle}>
-              Edit Reservation
-            </Text>
-            <View style={styles.formField}>
-              <Text style={styles.fieldLabel}>
-                Full Name
+        {/* Lista prenotazioni */}
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+          {filteredReservations.length === 0 ? (
+            <View style={styles.emptyListContainer}>
+              <Text style={styles.buttonText}>
+                Nessuna prenotazione per questa data
               </Text>
-              <TextInput
-                style={styles.textInput}
-                value={formData.fullName}
-                onChangeText={(text) => setFormData({ ...formData, fullName: text })}
-                placeholder="Full Name"
-              />
             </View>
-            <View style={styles.formField}>
-              <Text style={styles.fieldLabel}>
-                Phone Number
-              </Text>
-              <TextInput
-                style={styles.textInput}
-                value={formData.phone}
-                onChangeText={(text) => setFormData({ ...formData, phone: text })}
-                placeholder="Phone Number"
-                keyboardType="phone-pad"
-              />
-            </View>
-            <View style={styles.formField}>
-              <Text style={styles.fieldLabel}>
-                Date
-              </Text>
-              <TouchableOpacity
-                style={styles.textInput}
-                onPress={() => setIsFormDatePickerVisible(true)}
+          ) : (
+            filteredReservations.map((reservation) => (
+              <View
+                key={reservation.id}
+                style={styles.reservationCard}
               >
-                <Text>{format(formData.date, "MMMM dd, yyyy")}</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.formField}>
-              <Text style={styles.fieldLabel}>
-                Time
+                <View style={styles.cardHeader}>
+                  <View>
+                    <Text style={styles.cardName}>
+                      {reservation.fullName}
+                    </Text>
+                    <Text style={styles.cardPhone}>
+                      {reservation.phone}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: "row" }}>
+                    <TouchableOpacity onPress={() => handleEdit(reservation)} style={styles.actionIcon}>
+                      <Feather name="edit-2" size={20} color={COLORS.accent} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => handleDelete(reservation)} style={styles.actionIcon}>
+                      <Feather name="trash-2" size={20} color={COLORS.accent} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View>
+                  <View style={styles.infoRow}>
+                    <Feather name="calendar" size={16} color={COLORS.foreground} style={styles.infoIcon} />
+                    <Text style={styles.infoText}>
+                      {format(new Date(reservation.date), "MMMM dd, yyyy")}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Feather name="clock" size={16} color={COLORS.foreground} style={styles.infoIcon} />
+                    <Text style={styles.infoText}>
+                      {reservation.time}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Feather name="users" size={16} color={COLORS.foreground} style={styles.infoIcon} />
+                    <Text style={styles.infoText}>
+                      {reservation.seats} seats
+                    </Text>
+                  </View>
+                  {reservation.specialRequests && (
+                    <View style={styles.infoRow}>
+                      <Feather name="info" size={16} color={COLORS.foreground} style={styles.infoIcon} />
+                      <Text style={styles.infoText}>
+                        {reservation.specialRequests}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            ))
+          )}
+        </ScrollView>
+
+        {/* Header Date Picker */}
+        <DateTimePickerModal
+          isVisible={isHeaderDatePickerVisible}
+          mode="date"
+          date={selectedDate}
+          onConfirm={handleHeaderDateConfirm}
+          onCancel={() => setIsHeaderDatePickerVisible(false)} />
+
+        {/* Shift Picker Modal */}
+        <Modal
+          visible={isShiftPickerVisible}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setIsShiftPickerVisible(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>
+                Select Shift
               </Text>
+              <ScrollView>
+                {allTimes.map((time) => {
+                  const shift = shifts.find((s) => s.time === time);
+                  const enabled = shift ? shift.enabled : false;
+                  return (
+                    <TouchableOpacity
+                      key={time}
+                      style={styles.optionItem}
+                      onPress={() => handleShiftChange(time)}
+                    >
+                      <Text style={styles.infoText}>
+                        {time} {enabled ? "(Attivo)" : "(Bloccato)"}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
               <TouchableOpacity
-                style={styles.textInput}
-                onPress={() => setIsTimePickerVisible(true)}
+                style={styles.closeButton}
+                onPress={() => setIsShiftPickerVisible(false)}
               >
-                <Text>{formData.time}</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.formField}>
-              <Text style={styles.fieldLabel}>
-                Seats
-              </Text>
-              <TouchableOpacity
-                style={styles.textInput}
-                onPress={() => setIsSeatsPickerVisible(true)}
-              >
-                <Text>{formData.seats} seats</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.formField}>
-              <Text style={styles.fieldLabel}>
-                Special Requests
-              </Text>
-              <TextInput
-                style={[styles.textInput, styles.multilineInput]}
-                value={formData.specialRequests}
-                onChangeText={(text) => setFormData({ ...formData, specialRequests: text })}
-                placeholder="Special Requests (optional)"
-                multiline
-                numberOfLines={3}
-              />
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setIsEditModalOpen(false)}
-              >
-                <Text style={styles.buttonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.actionButton}
-                onPress={handleUpdate}
-              >
-                <Text style={styles.actionButtonText}>
-                  Update
+                <Text style={styles.closeButtonText}>
+                  Close
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
-        </ScrollView>
-      </Modal>
+        </Modal>
 
-      {/* Form Date Picker Modal */}
-      <DateTimePickerModal
-        isVisible={isFormDatePickerVisible}
-        mode="date"
-        date={formData.date}
-        onConfirm={handleFormDateConfirm}
-        onCancel={() => setIsFormDatePickerVisible(false)}
-      />
+        {/* Edit Reservation Modal */}
+        <Modal
+          visible={isEditModalOpen}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setIsEditModalOpen(false)}
+        >
 
-      {/* Form Time Picker Modal */}
-      <DateTimePickerModal
-        isVisible={isTimePickerVisible}
-        mode="time"
-        date={new Date(`2023-01-01T${formData.time}:00`)}
-        onConfirm={handleTimeConfirm}
-        onCancel={() => setIsTimePickerVisible(false)}
-      />
-
-      {/* Seats Picker Modal */}
-      <Modal
-        visible={isSeatsPickerVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setIsSeatsPickerVisible(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>
-              Select Seats
-            </Text>
-            <ScrollView>
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((num) => (
+          <View style={[styles.formContainer, { width: "100%", height: "100%" }]}>
+            <ScrollView contentContainerStyle={styles.formScrollView}>
+              <Text style={styles.modalTitle}>
+                Modifica Prenotazione
+              </Text>
+              <View style={styles.formField}>
+                <Text style={styles.fieldLabel}>
+                  Nome e cognome
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={formData.fullName}
+                  onChangeText={(text) => setFormData({ ...formData, fullName: text })}
+                  placeholder="Full Name" />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.fieldLabel}>
+                  Numero di telefono
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={formData.phone}
+                  onChangeText={(text) => setFormData({ ...formData, phone: text })}
+                  placeholder="Phone Number"
+                  keyboardType="phone-pad" />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.fieldLabel}>
+                  Data
+                </Text>
                 <TouchableOpacity
-                  key={num}
-                  style={styles.optionItem}
-                  onPress={() => {
-                    setFormData({ ...formData, seats: num });
-                    setIsSeatsPickerVisible(false);
-                  }}
+                  style={styles.textInput}
+                  onPress={() => setIsFormDatePickerVisible(true)}
                 >
-                  <Text style={styles.buttonText}>
-                    {num} seats
+                  <Text>{format(formData.date, "MMMM dd, yyyy")}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.fieldLabel}>
+                  Ora
+                </Text>
+                <TouchableOpacity
+                  style={styles.textInput}
+                  onPress={() => setIsTimePickerVisible(true)}
+                >
+                  <Text>{formData.time}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.fieldLabel}>
+                  Posti
+                </Text>
+                <TouchableOpacity
+                  style={styles.textInput}
+                  onPress={() => setIsSeatsPickerVisible(true)}
+                >
+                  <Text>{formData.seats} posti</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.fieldLabel}>
+                  Richieste speciali
+                </Text>
+                <TextInput
+                  style={[styles.textInput, styles.multilineInput]}
+                  value={formData.specialRequests}
+                  onChangeText={(text) => setFormData({ ...formData, specialRequests: text })}
+                  placeholder="Special Requests (optional)"
+                  multiline
+                  numberOfLines={3} />
+              </View>
+              <View style={styles.buttonRow}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setIsEditModalOpen(false)}
+                >
+                  <Text style={styles.buttonText}>Annulla</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionButton}
+                  onPress={handleUpdate}
+                >
+                  <Text style={styles.actionButtonText}>
+                    Conferma
                   </Text>
                 </TouchableOpacity>
-              ))}
+              </View>
             </ScrollView>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setIsSeatsPickerVisible(false)}
-            >
-              <Text style={styles.closeButtonText}>
-                Close
-              </Text>
-            </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
 
-      {/* Delete Confirmation Modal */}
-      <Modal
-        visible={isDeleteModalOpen}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setIsDeleteModalOpen(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>
-              Conferma eliminazione
-            </Text>
-            <Text style={styles.confirmationText}>
-              Sei sicuro di voler eliminare questa prenotazione?
-            </Text>
-            <View style={styles.buttonRow}>
+        </Modal>
+
+        {/* Form Date Picker Modal */}
+        <DateTimePickerModal
+          isVisible={isFormDatePickerVisible}
+          mode="date"
+          date={formData.date}
+          onConfirm={handleFormDateConfirm}
+          onCancel={() => setIsFormDatePickerVisible(false)} />
+
+        {/* Form Time Picker Modal */}
+        <DateTimePickerModal
+          isVisible={isTimePickerVisible}
+          mode="time"
+          date={new Date(`2023-01-01T${formData.time}:00`)}
+          onConfirm={handleTimeConfirm}
+          onCancel={() => setIsTimePickerVisible(false)} />
+
+        {/* Seats Picker Modal */}
+        <Modal
+          visible={isSeatsPickerVisible}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setIsSeatsPickerVisible(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>
+                Seleziona numero posti
+              </Text>
+              <ScrollView>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
+                  <TouchableOpacity
+                    key={num}
+                    style={styles.optionItem}
+                    onPress={() => {
+                      setFormData({ ...formData, seats: num });
+                      setIsSeatsPickerVisible(false);
+                    } }
+                  >
+                    <Text style={styles.buttonText}>
+                      {num} posti
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
               <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setIsDeleteModalOpen(false)}
+                style={styles.closeButton}
+                onPress={() => setIsSeatsPickerVisible(false)}
               >
-                <Text style={styles.buttonText}>Indietro</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.deleteButton}
-                onPress={handleConfirmDelete}
-              >
-                <Text style={styles.actionButtonText}>Conferma</Text>
+                <Text style={styles.closeButtonText}>
+                  Chiudi
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
+        </Modal>
+
+        {/* Delete Confirmation Modal */}
+        <Modal
+          visible={isDeleteModalOpen}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setIsDeleteModalOpen(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>
+                Conferma eliminazione
+              </Text>
+              <Text style={styles.confirmationText}>
+                Sei sicuro di voler eliminare questa prenotazione?
+              </Text>
+              <View style={styles.buttonRow}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setIsDeleteModalOpen(false)}
+                >
+                  <Text style={styles.buttonText}>Indietro</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.deleteButton}
+                  onPress={handleConfirmDelete}
+                >
+                  <Text style={styles.actionButtonText}>Conferma</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </SafeAreaView></>
   );
 };
 
